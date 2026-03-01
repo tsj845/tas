@@ -1,0 +1,22 @@
+
+!section .conf
+    !purpose gpc
+    !name "PARSE_TEST"
+    !invar 0
+
+!section .data
+    d_test: !str "test string"
+    f_test: !f64 12.0
+    s_test: !s32 -12
+    r_test: !res 120
+
+!section .code
+    @init:
+        add r0,r14
+        mov r1,$10
+        mov r1,d_test
+        ret
+        hlt
+
+!section .indx
+    @init () void

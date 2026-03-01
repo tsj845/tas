@@ -1,0 +1,7 @@
+[package]
+name = "tas"
+version = "0.1.0"
+edition = "2021"
+description = "an assembler for the territopple assembly language"
+
+[dependencies]
