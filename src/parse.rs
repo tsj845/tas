@@ -1,5 +1,7 @@
 //! handles parsing tasm source files into tokens
 
+use std::mem;
+
 use crate::types::*;
 use crate::errors::*;
 
@@ -278,6 +280,42 @@ enum IndexSeq {
     Args,
     Rett,
 }
+enum CodeSeq {
+    Scan = 0,
+    PrefixLP,
+    Prefix,
+    PrefixRP,
+    Mnemonic,
+    Operand,
+    OperandC,
+}
+
+struct CState<'a> {
+    pub seq: CodeSeq,
+    pub prefixes: Vec<Prefix>,
+    pub mnemonic: Mnemonic,
+    pub operands: Vec<(Operand, Token<'a>)>,
+    /// parse failed, do not attempt to construct a token
+    pub scrapped: bool,
+    pub line: u32,
+    pub column: u32,
+}
+impl<'a> Default for CState<'a> {
+    fn default() -> Self {
+        Self { seq: CodeSeq::Scan, prefixes: Vec::new(), mnemonic: Mnemonic::ADD, operands: Vec::new(), scrapped: false, line: 0, column: 0 }
+    }
+}
+impl<'a> CState<'a> {
+    pub fn reset(&mut self) -> () {
+        self.seq = CodeSeq::Scan;
+        self.prefixes.clear();
+        self.operands.clear();
+        self.scrapped = false;
+    }
+    pub fn into_token(&mut self) -> Token<'a> {
+        return Token { tok: Tok::Instruction(self.mnemonic, mem::replace(&mut self.prefixes, Vec::new()), mem::replace(&mut self.operands, Vec::new())), line: self.line, column: self.column };
+    }
+}
 
 /// convert syntactic tokens into semantic tokens, which take context into account
 pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec<'a>> {
@@ -287,6 +325,7 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
     let mut csec = Section::None;
     let mut range_s = [0usize;3];let mut range_e = [0usize;2];
     let mut indx_seq = IndexSeq::Scan;
+    let mut cstate = CState::default();
     while i < l {
         match toks[i].tok {
             Tok::Keyword(Keyword::Cutoff) => {
@@ -494,9 +533,107 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
                         }
                         _ => {build.push(toks[i].clone());}
                     }
-                    _ => {build.push(toks[i].clone());}
                 }
-                _ => {build.push(toks[i].clone());}
+                Section::Code => match cstate.seq {
+                    CodeSeq::Scan => match toks[i].tok {
+                        Tok::Word(_) => {cstate.seq=CodeSeq::PrefixLP;continue;}
+                        Tok::Newline => {}
+                        Tok::Label(_) => {build.push(toks[i].clone());}
+                        _ => {haderr=true;error(AsmErr { message: &format!("expected prefix or mnemonic, got: {:?}", toks[i].tok), line: toks[i].line, column: toks[i].column, context: None });}
+                    }
+                    CodeSeq::PrefixLP => match toks[i].tok {
+                        Tok::Symbol(b'(') => {cstate.seq = CodeSeq::Prefix;}
+                        Tok::Word(_) | Tok::Newline => {cstate.seq = CodeSeq::Mnemonic;continue;}
+                        _ => {haderr=true;error(AsmErr { message: "invalid token", line: toks[i].line, column: toks[i].column, context: None });cstate.scrapped=true;}
+                    }
+                    CodeSeq::Prefix => {
+                        match toks[i].tok {
+                            Tok::Word(word) => match Prefix::from_word(word) {
+                                Some(p) => {cstate.prefixes.push(p);}
+                                _ => {haderr=true;error(AsmErr { message: "invalid prefix", line: toks[i].line, column: toks[i].column, context: None });cstate.scrapped=true;}
+                            }
+                            _ => {haderr=true;error(AsmErr { message: "invalid prefix", line: toks[i].line, column: toks[i].column, context: None });cstate.scrapped=true;}
+                        }
+                        cstate.seq = CodeSeq::PrefixRP;
+                    }
+                    CodeSeq::PrefixRP => {
+                        match toks[i].tok {
+                            Tok::Symbol(b')') => {}
+                            _ => {haderr=true;error(AsmErr { message: "expected closing parenthesis", line: toks[i].line, column: toks[i].column, context: None });cstate.scrapped=true;}
+                        }
+                        cstate.seq = CodeSeq::PrefixLP;
+                    }
+                    CodeSeq::Mnemonic => match toks[i].tok {
+                        Tok::Newline => {haderr=true;error(AsmErr { message: "expected instruction mnemonic", line: toks[i].line, column: toks[i].column, context: None });cstate.seq=CodeSeq::Operand;continue;}
+                        Tok::Word(word) => {
+                            match Mnemonic::from_word(word) {
+                                Some(m) => {cstate.mnemonic=m;cstate.seq=CodeSeq::Operand;cstate.line=toks[i].line;cstate.column=toks[i].column;}
+                                None => {haderr=true;cstate.scrapped=true;error(AsmErr { message: &format!("'{}' is not a valid instruction mnemonic", word), line: toks[i].line, column: toks[i].column, context: None });}
+                            }
+                            cstate.seq = CodeSeq::Operand;
+                        }
+                        _ => {haderr=true;error(AsmErr { message: &format!("invalid instruction mnemonic: {:?}", toks[i].tok), line: toks[i].line, column: toks[i].column, context: None });cstate.scrapped=true;}
+                    }
+                    CodeSeq::OperandC => match toks[i].tok {
+                        Tok::Symbol(b',') => {cstate.seq = CodeSeq::Operand;}
+                        Tok::Newline => {cstate.seq = CodeSeq::Operand;continue;}
+                        _ => {haderr=true;cstate.scrapped=true;error(AsmErr { message: "expected comma or newline", line: toks[i].line, column: toks[i].column, context: None });}
+                    }
+                    CodeSeq::Operand => match toks[i].tok {
+                        Tok::Symbol(b'[') => match toks[i+1].tok {
+                            Tok::Word(word) => {
+                                build.push(Token {tok:match Register::from_word(word) {Some(r)=>Tok::Reg(r),_=>Tok::Word(word)},line:toks[i+1].line,column:toks[i+1].column});
+                                let cl = build.len();
+                                match toks[i+2].tok {
+                                    Tok::Symbol(b']') => {
+                                        cstate.operands.push((Operand::RMem, Token {tok:Tok::Deref(build.split_off(cl).into_boxed_slice()),line:toks[i+1].line,column:toks[i+1].column}));
+                                        i += 2;
+                                        cstate.seq = CodeSeq::OperandC;
+                                    }
+                                    Tok::UInt(_) | Tok::SInt(_) => match toks[i+3].tok {
+                                        Tok::Symbol(b']') => {
+                                            build.push(toks[i+2].clone());
+                                            cstate.operands.push((Operand::RMem, Token {tok:Tok::Deref(build.split_off(cl).into_boxed_slice()),line:toks[i+1].line,column:toks[i+1].column}));
+                                            i += 3;
+                                            cstate.seq = CodeSeq::OperandC;
+                                        }
+                                        _ => {let _=build.split_off(cl);haderr=true;cstate.scrapped=true;cstate.seq=CodeSeq::OperandC;error(AsmErr { message: "invalid deref", line: toks[i+3].line, column: toks[i+3].column, context: None });continue;}
+                                    }
+                                    _ => {let _=build.split_off(cl);haderr=true;cstate.scrapped=true;cstate.seq=CodeSeq::OperandC;error(AsmErr { message: "invalid deref", line: toks[i+2].line, column: toks[i+2].column, context: None });continue;}
+                                }
+                            }
+                            _ => {haderr=true;cstate.scrapped=true;cstate.seq=CodeSeq::OperandC;error(AsmErr { message: "expected deref", line: toks[i+1].line, column: toks[i+1].column, context: None });continue;}
+                        }
+                        Tok::Addr(_) => {cstate.operands.push((Operand::AMem, toks[i].clone()));cstate.seq = CodeSeq::OperandC;}
+                        Tok::SInt(_) | Tok::UInt(_) | Tok::Float(_) => {cstate.operands.push((Operand::Imm, toks[i].clone()));cstate.seq = CodeSeq::OperandC;}
+                        Tok::Word(word) => match Register::from_word(word) {
+                            Some(r) => {cstate.operands.push((r.rtype(), Token {tok:Tok::Reg(r),line:toks[i].line,column:toks[i].column}));cstate.seq = CodeSeq::OperandC;}
+                            None => {cstate.operands.push((Operand::Imm, toks[i].clone()));cstate.seq = CodeSeq::OperandC;}
+                        }
+                        Tok::Newline => {
+                            if cstate.scrapped {
+                                cstate.reset();
+                                continue;
+                            }
+                            if let Some(_) = OpPattern::try_find(cstate.mnemonic, &cstate.prefixes, &cstate.operands) {
+                                build.push(cstate.into_token());
+                            } else {
+                                haderr = true;
+                                error(AsmErr { message: "invalid operands", line: cstate.line, column: cstate.column, context: None });
+                                // println!("{:?}\n{:?}\n{:?}", cstate.mnemonic, cstate.prefixes, cstate.operands);
+                            }
+                            cstate.reset();
+                        }
+                        _ => {}
+                    }
+                }
+                Section::None => {
+                    match toks[i].tok {
+                        Tok::Newline => {}
+                        _ => {warn(AsmErr { message: "token outside of section", line: toks[i].line, column: toks[i].column, context: None });}
+                    }
+                    build.push(toks[i].clone());
+                }
             }
         }
         i += 1;

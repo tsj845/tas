@@ -1,7 +1,7 @@
 //! type declarations
 
 #[allow(unused_imports)]
-pub use crate::mnemonics::{M as Mnemonic,P as Prefix,O as Operand,Instruction,ALLOWED_PATTERNS};
+pub use crate::mnemonics::{M as Mnemonic,P as Prefix,O as Operand,Instruction,ALLOWED_PATTERNS,Register,OpPattern};
 
 #[allow(non_camel_case_types)]
 pub type uptr = u32;
@@ -64,6 +64,10 @@ pub enum Tok<'a> {
     UInt(u64),
     SInt(i64),
     Float(f64),
+    Prefix(Prefix),
+    Instruction(Mnemonic,Vec<Prefix>,Vec<(Operand, Token<'a>)>),
+    Deref(Box<[Token<'a>]>),
+    Reg(Register),
     Invalid,
 }
 
