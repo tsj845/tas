@@ -1,5 +1,6 @@
 use std::env::args;
 use std::fs;
+use tas::emit::emit;
 use tas::types::*;
 use tas::parse::{lex, semantic_parse, syntactic_parse};
 
@@ -10,15 +11,24 @@ struct Params {
     pub use_stdout: bool,
     pub syn_parse_only: bool,
     pub sem_parse_only: bool,
+    pub dry_run: bool,
 }
 impl Default for Params {
     fn default() -> Self {
-        Self { s: "".to_owned(), o: "".to_owned(), lex_only: false, use_stdout: false, syn_parse_only: false, sem_parse_only: false }
+        Self { s: "".to_owned(), o: "".to_owned(), lex_only: false, use_stdout: false, syn_parse_only: false, sem_parse_only: false, dry_run: false }
     }
 }
 impl Params {
     pub fn unpopulated(&self) -> bool {
         return self.s.len() == 0 || (!self.use_stdout && self.o.len() == 0);
+    }
+}
+
+fn test() -> () {
+    let testvals = vec![(Tok::UInt(0),1),(Tok::SInt(0),1),(Tok::SInt(-1),1),(Tok::UInt(0x8000),2),(Tok::SInt(-32768),2)];
+    for (t, e) in testvals {
+        println!("testing min_size({t:?}), expecting {e}");
+        println!("result: {}", min_size(&t));
     }
 }
 
@@ -55,6 +65,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     params.sem_parse_only = true;
                     params.use_stdout = true;
                 }
+                if s.contains('d') {
+                    params.dry_run = true;
+                    params.use_stdout = true;
+                }
+                if s.contains('T') {
+                    test();
+                    return Ok(());
+                }
             }
         } else {
             break;
@@ -83,6 +101,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(st) => {
                             if params.sem_parse_only {
                                 for i in st {println!{"{:?}", i};}
+                                return Ok(());
+                            }
+                            if params.o.len() == 0 && !params.dry_run {
+                                println!("MUST SPECIFY OUTPUT PATH FOR EMISSION");
+                                return Ok(());
+                            }
+                            if !emit(&params.o, st, params.dry_run)? {
+                                println!("EMISSION ERR");
                                 return Ok(());
                             }
                         }

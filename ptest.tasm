@@ -5,18 +5,28 @@
     !invar 0
 
 !section .data
-    d_test: !str "test string"
     f_test: !f64 12.0
+    d_test: !str "test string"
     s_test: !s32 -12
     r_test: !res 120
+    e_test: !s32 0
 
 !section .code
     @init:
         add r0,r14
+        add r0,32768
+        add r0,-32768
         mov r1,$10
         mov r1,d_test
+        call spin
+        jmp -4
+        ret
+    @think:
         ret
         hlt
+    spin:
+        jmp spin
 
 !section .indx
     @init () void
+    @think () auto

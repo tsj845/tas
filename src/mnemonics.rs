@@ -8,7 +8,7 @@ macro_rules! sw {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Register {
     R0 = 0,
     R1,
@@ -75,6 +75,9 @@ impl Register {
         }
         return O::XReg;
     }
+    pub fn value(&self) -> u8 {
+        return *self as u8;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -111,6 +114,31 @@ pub enum M {
     MOV,
     HLT
 }
+// not actually dead, but only used in static asserts
+#[allow(dead_code)]
+const fn m_gt(a: M, b: M) -> bool {
+    return a as u8 > b as u8;
+}
+#[allow(dead_code)]
+const fn m_lt(a: M, b: M) -> bool {
+    return (a as u8) < (b as u8);
+}
+// invariant checks for M::is_jmp(&self)
+const _: () = assert!(m_gt(M::JZ,M::JMP) && m_lt(M::JZ,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JE,M::JMP) && m_lt(M::JE,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JNZ,M::JMP) && m_lt(M::JNZ,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JNE,M::JMP) && m_lt(M::JNE,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JA,M::JMP) && m_lt(M::JA,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JAE,M::JMP) && m_lt(M::JAE,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JG,M::JMP) && m_lt(M::JG,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JGE,M::JMP) && m_lt(M::JGE,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JB,M::JMP) && m_lt(M::JB,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JBE,M::JMP) && m_lt(M::JBE,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(m_gt(M::JL,M::JMP) && m_lt(M::JL,M::JLE), "M::is_jmp(&self) invariant not upheld");
+const _: () = assert!(M::JLE as u8 - M::JMP as u8 == 12, "M::is_jmp(&self) invariant not upheld");
+const M_CALL: u8 = M::CALL as u8;
+const M_JMP: u8 = M::JMP as u8;
+const M_JLE: u8 = M::JLE as u8;
 impl M {
     pub fn from_word(word: &str) -> Option<Self> {
         Some(match word {
@@ -154,6 +182,10 @@ impl M {
             _ => {return None;}
         })
     }
+    pub fn is_jmp(&self) -> bool {
+        let n = *self as u8;
+        return n == M_CALL || (n >= M_JMP && n <= M_JLE);
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum P {
@@ -162,7 +194,10 @@ pub enum P {
     DWord,
     QWord,
     Fp,
-    Call
+    Call,
+    Sign,
+    Era,
+    Oprev,
 }
 impl P {
     pub fn from_word(word: &str) -> Option<Self> {
@@ -215,7 +250,7 @@ const RR_OPS: OpList = &[&[O::Reg],&[O::Reg]];
 const RMI: StatSlice<O> = &[O::Reg,O::RMem,O::Imm];
 // const RAI: StatSlice<O> = &[O::Reg,O::AMem,O::Imm];
 const XMI: StatSlice<O> = &[O::XReg,O::RMem,O::Imm];
-const JMP_OPS: OpList = sw!(&[O::Reg,O::RMem]);
+const JMP_OPS: OpList = sw!(&[O::Reg,O::Imm]);
 
 const JMP_PRE: PreList = sw!(P::Call);
 
@@ -257,7 +292,7 @@ pub const ALLOWED_PATTERNS: &'static [AllowedPattern] = &[
     AllowedPattern(M::JLE,JMP_PRE,JMP_OPS),
     AllowedPattern(M::RET,NO_PRE,NO_OPS),
     AllowedPattern(M::SYSCALL,NO_PRE,NO_OPS),
-    AllowedPattern(M::CALL,NO_PRE,JMP_OPS),
+    AllowedPattern(M::CALL,JMP_PRE,JMP_OPS),
     AllowedPattern(M::MOV,FP_PREFIXES,sw!(sw!(O::XReg),XMI)),
     AllowedPattern(M::HLT,NO_PRE,NO_OPS),
 ];
@@ -272,16 +307,25 @@ impl OpPattern {
     pub fn try_find(mnemonic: M, prefixes: &Vec<P>, operands: &Vec<(O, crate::types::Token)>) -> Option<Self> {
         let mfilt = ALLOWED_PATTERNS.iter().filter(|x|x.0==mnemonic).collect::<Vec<_>>();
         // println!("{mfilt:?}");
-        for pat in mfilt {
+        // println!("{mnemonic:?}");
+        for pat in mfilt.iter() {
             if prefixes.iter().all(|x|pat.1.contains(x)) {
                 if pat.2.len() != operands.len() {
+                    // println!("failed pat: {:?}", pat.2);
                     continue;
                 }
+                // println!("{mnemonic:?}");
                 if operands.iter().enumerate().all(|x|pat.2[x.0].iter().any(|y|x.1.0.qualified_eq(y))) {
                     return Some(Self(mnemonic,prefixes.to_owned(),operands.iter().map(|x|x.0).collect::<Vec<_>>()));
                 }
             }
         }
+        // println!("{mfilt:?}");
+        // println!("ops: {operands:?}");
+        // println!("{}", operands.len());
         None
+    }
+    pub fn sizeof(&self) -> u64 {
+        return 0;
     }
 }

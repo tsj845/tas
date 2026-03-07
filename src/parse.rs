@@ -299,10 +299,11 @@ struct CState<'a> {
     pub scrapped: bool,
     pub line: u32,
     pub column: u32,
+    pub relto: RelTo,
 }
 impl<'a> Default for CState<'a> {
     fn default() -> Self {
-        Self { seq: CodeSeq::Scan, prefixes: Vec::new(), mnemonic: Mnemonic::ADD, operands: Vec::new(), scrapped: false, line: 0, column: 0 }
+        Self { seq: CodeSeq::Scan, prefixes: Vec::new(), mnemonic: Mnemonic::ADD, operands: Vec::new(), scrapped: false, line: 0, column: 0, relto: RelTo::None }
     }
 }
 impl<'a> CState<'a> {
@@ -311,9 +312,10 @@ impl<'a> CState<'a> {
         self.prefixes.clear();
         self.operands.clear();
         self.scrapped = false;
+        self.relto = RelTo::None;
     }
     pub fn into_token(&mut self) -> Token<'a> {
-        return Token { tok: Tok::Instruction(self.mnemonic, mem::replace(&mut self.prefixes, Vec::new()), mem::replace(&mut self.operands, Vec::new())), line: self.line, column: self.column };
+        return Token { tok: Tok::Instruction(self.mnemonic, mem::replace(&mut self.prefixes, Vec::new()), mem::replace(&mut self.operands, Vec::new()), mem::replace(&mut self.relto, RelTo::None)), line: self.line, column: self.column };
     }
 }
 
@@ -323,7 +325,7 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
     let l = toks.len();let mut i = 0usize;
     let mut haderr = false;
     let mut csec = Section::None;
-    let mut range_s = [0usize;3];let mut range_e = [0usize;2];
+    let mut range_s = [0usize;3];//let mut range_e = [0usize;2];
     let mut indx_seq = IndexSeq::Scan;
     let mut cstate = CState::default();
     while i < l {
@@ -567,7 +569,14 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
                         Tok::Newline => {haderr=true;error(AsmErr { message: "expected instruction mnemonic", line: toks[i].line, column: toks[i].column, context: None });cstate.seq=CodeSeq::Operand;continue;}
                         Tok::Word(word) => {
                             match Mnemonic::from_word(word) {
-                                Some(m) => {cstate.mnemonic=m;cstate.seq=CodeSeq::Operand;cstate.line=toks[i].line;cstate.column=toks[i].column;}
+                                Some(m) => {
+                                    cstate.mnemonic=m;cstate.seq=CodeSeq::Operand;cstate.line=toks[i].line;cstate.column=toks[i].column;
+                                    match m {
+                                        Mnemonic::CALL => {cstate.prefixes.push(Prefix::Call)}
+                                        Mnemonic::IDIV|Mnemonic::IMUL => {cstate.prefixes.push(Prefix::Sign)}
+                                        _ => {}
+                                    }
+                                }
                                 None => {haderr=true;cstate.scrapped=true;error(AsmErr { message: &format!("'{}' is not a valid instruction mnemonic", word), line: toks[i].line, column: toks[i].column, context: None });}
                             }
                             cstate.seq = CodeSeq::Operand;
@@ -586,12 +595,65 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
                                 let cl = build.len();
                                 match toks[i+2].tok {
                                     Tok::Symbol(b']') => {
+                                        let t = &build[build.len()-1];
+                                        match t.tok {
+                                            Tok::Reg(r) => {
+                                                if cstate.mnemonic != Mnemonic::MOV {
+                                                    if cstate.relto.qualified_eq(&RelTo::Reg(r)) {
+                                                        cstate.relto = RelTo::Reg(r);
+                                                    } else {
+                                                        haderr = true;
+                                                        cstate.scrapped = true;
+                                                        error(AsmErr { message: "conflicting memoffsets", line: t.line, column: t.column, context: None });
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
                                         cstate.operands.push((Operand::RMem, Token {tok:Tok::Deref(build.split_off(cl).into_boxed_slice()),line:toks[i+1].line,column:toks[i+1].column}));
                                         i += 2;
                                         cstate.seq = CodeSeq::OperandC;
                                     }
                                     Tok::UInt(_) | Tok::SInt(_) => match toks[i+3].tok {
                                         Tok::Symbol(b']') => {
+                                            let t = &build[build.len()-1];
+                                            match t.tok {
+                                                Tok::Reg(r) => {
+                                                    if cstate.relto.qualified_eq(&RelTo::Reg(r)) {
+                                                        cstate.relto = RelTo::Reg(r);
+                                                    } else {
+                                                        haderr = true;
+                                                        cstate.scrapped = true;
+                                                        error(AsmErr { message: "conflicting memoffsets", line: t.line, column: t.column, context: None });
+                                                    }
+                                                }
+                                                Tok::Word(w) => match w {
+                                                    "invar" => {
+                                                        if cstate.relto.qualified_eq(&RelTo::Invar) {
+                                                            cstate.relto = RelTo::Invar;
+                                                        } else {
+                                                            haderr = true;
+                                                            cstate.scrapped = true;
+                                                            error(AsmErr { message: "conflicting memoffsets", line: t.line, column: t.column, context: None });
+                                                        }
+                                                    }
+                                                    "data" => {
+                                                        if cstate.relto.qualified_eq(&RelTo::Data) {
+                                                            cstate.relto = RelTo::Data;
+                                                        } else {
+                                                            haderr = true;
+                                                            cstate.scrapped = true;
+                                                            error(AsmErr { message: "conflicting memoffsets", line: t.line, column: t.column, context: None });
+                                                        }
+                                                    }
+                                                    _ => {
+                                                        haderr = true;
+                                                        cstate.scrapped = true;
+                                                        error(AsmErr { message: "invalid deref base", line: t.line, column: t.column, context: None });
+                                                    }
+                                                }
+                                                _ => {unreachable!();}
+                                            }
                                             build.push(toks[i+2].clone());
                                             cstate.operands.push((Operand::RMem, Token {tok:Tok::Deref(build.split_off(cl).into_boxed_slice()),line:toks[i+1].line,column:toks[i+1].column}));
                                             i += 3;
@@ -618,6 +680,7 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
                             if let Some(_) = OpPattern::try_find(cstate.mnemonic, &cstate.prefixes, &cstate.operands) {
                                 build.push(cstate.into_token());
                             } else {
+                                println!("{:?}", &cstate.operands);
                                 haderr = true;
                                 error(AsmErr { message: "invalid operands", line: cstate.line, column: cstate.column, context: None });
                                 // println!("{:?}\n{:?}\n{:?}", cstate.mnemonic, cstate.prefixes, cstate.operands);
@@ -700,6 +763,7 @@ fn parse_type<'a>(toks: Vec<Token<'a>>) -> Result<Type, Type> {
                         "lstr" => {t = Type::Lstr;}
                         "struct" => {t = Type::Struct;}
                         "any" => {t = Type::Any;}
+                        "auto" => {t = Type::Auto;}
                         _ => {error(AsmErr { message: "invalid type", line: part.line, column: part.column, context: None });haderr=true;break;}
                     }
                     _ => {error(AsmErr { message: "invalid parameter type", line: part.line, column: part.column, context: None });haderr=true;break;}
