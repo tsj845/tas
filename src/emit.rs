@@ -257,7 +257,9 @@ fn construct_maps<'a>(mut toks: Vec<Token<'a>>) -> Option<(HashMap<String, (u64,
                             }
                         }
                     }
-                    cpos += count + (halfs >> 1) + halfs&1;
+                    // print!("{mnemonic:?}, {cpos}, {count}, {halfs}");
+                    cpos += count + (halfs >> 1) + (halfs&1);
+                    // println!(", {cpos}");
                 }
                 _ => {panic!("unexpected token type in code section");}
             }

@@ -1,0 +1,26 @@
+
+!section .conf
+    !purpose gpc
+    !name "EXEC_TEST"
+    !invar 0
+
+!section .data
+
+!section .code
+    @init:
+        mov r0,6
+        syscall
+    _test:
+        mov r2,2
+        shl r1,r2
+        ret
+    _test2:
+        add r1,r14
+        call _test
+        mov r0,6
+        syscall
+
+!section .indx
+    @init () void
+    _test (u32 n) u32
+    _test2 (u32 n) u32
