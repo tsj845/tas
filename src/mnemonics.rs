@@ -36,6 +36,8 @@ pub enum Register {
     RF3,
     RF4,
     RF5,
+    INVAR,
+    DATA,
 }
 impl Register {
     pub fn from_word(word: &str) -> Option<Self> {
@@ -66,6 +68,8 @@ impl Register {
             "rf3" => Self::RF3,
             "rf4" => Self::RF4,
             "rf5" => Self::RF5,
+            "invar" => Self::INVAR,
+            "data" => Self::DATA,
             _ => {return None;}
         })
     }
@@ -112,7 +116,8 @@ pub enum M {
     SYSCALL,
     CALL,
     MOV,
-    HLT
+    HLT,
+    BRK,
 }
 // not actually dead, but only used in static asserts
 #[allow(dead_code)]
@@ -179,6 +184,7 @@ impl M {
             "call" => Self::CALL,
             "mov" => Self::MOV,
             "hlt" => Self::HLT,
+            "brk" => Self::BRK,
             _ => {return None;}
         })
     }
@@ -293,8 +299,9 @@ pub const ALLOWED_PATTERNS: &'static [AllowedPattern] = &[
     AllowedPattern(M::RET,NO_PRE,NO_OPS),
     AllowedPattern(M::SYSCALL,NO_PRE,NO_OPS),
     AllowedPattern(M::CALL,JMP_PRE,JMP_OPS),
-    AllowedPattern(M::MOV,FP_PREFIXES,sw!(sw!(O::XReg),XMI)),
+    AllowedPattern(M::MOV,FP_PREFIXES,sw!(sw!(O::XReg,O::RMem),XMI)),
     AllowedPattern(M::HLT,NO_PRE,NO_OPS),
+    AllowedPattern(M::BRK,NO_PRE,sw!(sw!(O::Imm))),
 ];
 
 pub struct Instruction<'a> {

@@ -159,15 +159,33 @@ fn construct_maps<'a>(mut toks: Vec<Token<'a>>) -> Option<(HashMap<String, (u64,
                     count += prefixes.len() as u64;
                     let mut era = false;
                     let mut sign = prefixes.contains(&Prefix::Sign);
+                    let mut count_deref_regs = false;
                     let call = prefixes.contains(&Prefix::Call);
+                    if (*mnemonic).eq(&Mnemonic::BRK) {
+                        cpos += 2;
+                        continue;
+                    }
                     if (*mnemonic).eq(&Mnemonic::MOV) {
                         if operands[0].0 == Operand::RMem {
-                            if match operands[0].1.tok.clone() {
+                            let ct = operands[0].1.tok.clone();
+                            if match &ct {
                                 Tok::Deref(i) => i.len(),
                                 _ => unreachable!()
                             } == 1 {
                                 prefixes.push(Prefix::Oprev);
                                 cpos += 1;
+                                if match &ct {
+                                    Tok::Deref(i) => match i[0].tok {
+                                        Tok::Reg(r) => r.rtype() == Operand::XReg,
+                                        _ => {panic!("parser failure, dereferenced offset without base");}
+                                    }
+                                    _ => unreachable!()
+                                } {
+                                    prefixes.push(Prefix::Era);
+                                    // cpos += 1;
+                                    era = true;
+                                    count_deref_regs = true;
+                                }
                             }
                         }
                     }
@@ -234,6 +252,15 @@ fn construct_maps<'a>(mut toks: Vec<Token<'a>>) -> Option<(HashMap<String, (u64,
                                         for itok in inner {
                                             match itok.tok {
                                                 Tok::SInt(_)|Tok::UInt(_) => {count += min_size(&itok.tok);}
+                                                Tok::Reg(_) => {
+                                                    if count_deref_regs {
+                                                        if era {
+                                                            count += 1;
+                                                        } else {
+                                                            halfs += 1;
+                                                        }
+                                                    }
+                                                }
                                                 _ => {unreachable!();}
                                             }
                                         }
@@ -261,7 +288,7 @@ fn construct_maps<'a>(mut toks: Vec<Token<'a>>) -> Option<(HashMap<String, (u64,
                     cpos += count + (halfs >> 1) + (halfs&1);
                     // println!(", {cpos}");
                 }
-                _ => {panic!("unexpected token type in code section");}
+                _ => {panic!("unexpected token type in code section {:?}", token);}
             }
             _ => {}
         }
@@ -300,7 +327,7 @@ fn make_valbytes<'a>(op: &(Operand, Token<'a>), fpd: bool, vsize: i32, parent_la
                             osize = min_size(&inner[1].tok) as u8;
                             // RMem is interpreted as a two's compliment signed value
                             // must ensure that the high bit is not one for a non-negative value
-                            if v.leading_zeros() % 8 == 0 {
+                            if v != 0 && v.leading_zeros() % 8 == 0 {
                                 osize += 1;
                                 if osize > 8 {
                                     panic!("size overflow");
@@ -514,14 +541,14 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                 Tok::Signature(id, args, rtype) => {
                     output[3].push([&([id.len() as u8])[..], (*id).as_bytes()].concat().into_boxed_slice());
                     output[3].push((label_map.get(*id).unwrap().1 as u32).to_be_bytes().to_vec().into_boxed_slice());
-                    output[3].push([args.len() as u8].to_vec().into_boxed_slice());
                     match *id {
                         "@constructor" => {
-                            if rtype.auto_eq(&Type::Void) {
+                            if !rtype.auto_eq(&Type::Void) {
                                 haderr = true;
                                 error(AsmErr { message: "@constructor must be void", line: token.line, column: token.column, context: None });
                                 continue 'outer;
                             }
+                            output[3].push([args.len() as u8].to_vec().into_boxed_slice());
                             for arg in args {
                                 if let Tok::Param(name, ty) = arg {
                                     if !ty.auto_eq(&Type::U32) {
@@ -534,7 +561,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                     unreachable!();
                                 }
                             }
-                            output[3].push(Type::Void.to_bytes());
+                            // output[3].push(Type::Void.to_bytes());
                         }
                         "@getpositionof" => {
                             if !rtype.auto_eq(&Type::Uarr(Box::new(Type::U16))) {
@@ -565,6 +592,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                             }
                         }
                         _ => {
+                            output[3].push([args.len() as u8].to_vec().into_boxed_slice());
                             let (n,t): (Vec<_>,Vec<_>) = args.iter().map(|x|match x {Tok::Param(n, t)=>(*n,t),_=>{panic!("parser fail, unexpected token in indx section");}}).unzip();
                             for name in n {
                                 output[3].push([&([name.len() as u8])[..], name.as_bytes()].concat().into_boxed_slice());
@@ -579,7 +607,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                 _ => {panic!("parser fail, unexpected token type in indx section");}
             }
             Section::Code => match &token.tok {
-                Tok::Label(s) => {parent_label=*s;}
+                Tok::Label(s) => {if !s.starts_with('.') {parent_label=*s;}}
                 Tok::Instruction(mnemonic, prefixes, operands, relto) => {
                     let mut build: Vec<u8> = Vec::new();
                     let mut sized = false;
@@ -587,6 +615,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                     let mut call = false;
                     let mut era = false;
                     let mut vsize = 4;
+                    println!("{mnemonic:?} {prefixes:?} {operands:?}");
                     for prefix in prefixes {
                         match prefix {
                             Prefix::Byte|Prefix::Word|Prefix::DWord|Prefix::QWord => {
@@ -634,6 +663,16 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                         RelTo::Reg(r) => {build.push(0x49);build.push(0x40|r.value());}
                     }
                     match mnemonic {
+                        Mnemonic::BRK => match operands[0].0 {
+                            Operand::Imm => match operands[0].1.tok {
+                                Tok::UInt(v) => {
+                                    build.push(0x0b);
+                                    build.push(v as u8);
+                                }
+                                _ => unreachable!()
+                            }
+                            _ => unreachable!()
+                        }
                         Mnemonic::ADD|Mnemonic::SUB|Mnemonic::MUL|Mnemonic::DIV|Mnemonic::IMUL|Mnemonic::IDIV|Mnemonic::CMP => match operands[1].0 {
                             Operand::Reg|Operand::XReg => {
                                 build.push(match mnemonic {
@@ -869,6 +908,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                     match operands[1].0 {
                                         Operand::Reg|Operand::XReg => {
                                             let ry = match &operands[1].1.tok {Tok::Reg(r)=>r.value(),_=>unreachable!()};
+                                            build.push(0x2b);
                                             if era {
                                                 build.push(rx);
                                                 build.push(ry);
@@ -882,6 +922,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                                 _ => {build.push(0x2c);}
                                             }
                                             let valbytes = match make_valbytes(&operands[1], fpd, vsize, parent_label, &label_map) {Ok(v)=>v,Err(_)=>{haderr=true;continue 'outer;}};
+                                            // println!("{valbytes:?}");
                                             if era {
                                                 build.push(rx);
                                                 build.push(valbytes.len() as u8);
@@ -900,6 +941,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                         },
                                         _ => unreachable!()
                                     };
+                                    println!("{:?}", operands[1].1);
                                     let rx = match operands[1].1.tok {
                                         Tok::Reg(r) => r.value(),
                                         _ => unreachable!()
@@ -944,10 +986,14 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                     opcode |= 4;
                                     let immbytes;
                                     match &operands[0].1.tok {
-                                        Tok::Word(sym) => {
-                                            if let Some(iv) = index_map.get(*sym) {
+                                        Tok::Word(rsym) => {
+                                            let sym = match rsym.starts_with('.') {
+                                                true => parent_label.to_owned()+(*rsym),
+                                                _ => (*rsym).to_owned()
+                                            };
+                                            if let Some(iv) = index_map.get(&sym) {
                                                 immbytes = (*iv as u16).to_be_bytes().to_vec();
-                                            } else if let Some(ov) = label_map.get(*sym) {
+                                            } else if let Some(ov) = label_map.get(&sym) {
                                                 if call {
                                                     opcode |= 2;
                                                     immbytes = (ov.1 as u32).to_be_bytes().to_vec();
@@ -955,7 +1001,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                                     immbytes = (ov.1 as u16).to_be_bytes().to_vec();
                                                 }
                                             } else {
-                                                panic!("parser failure, undeclared label");
+                                                panic!("parser failure, undeclared label '{}'", sym);
                                             }
                                         }
                                         Tok::UInt(v) => {

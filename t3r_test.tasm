@@ -1,0 +1,87 @@
+
+!section .conf
+    !purpose 3tr
+    !name "T3R_TEST"
+    !some 1
+    !none 0
+    !fstr "TEST"
+    !invar 6
+
+!section .data
+
+!section .code
+    _ret:
+        mov r0,6
+        syscall
+    ; r1 = width (u32)
+    ; r2 = height (u32)
+    @constructor:
+        ; get total tiles
+        mov r3,r2
+        mul r3,r1
+        ; store in invar 0
+        mov [invar],r3
+        ; store max neighbors (4) in invar 1
+        mov r4,invar
+        mov r0,4
+        add r4,r0
+        mov [r4],r0
+        ; mov w*h-1 into b_right
+        sub r3,r14
+        add r4,r0
+        mov [r4],r3
+        ; mov w*h-w-1 into b_left
+        add r4,r0
+        sub r3,r1
+        mov [r4],r3
+        ; mov w into width
+        add r4,r0
+        mov [r4],r1
+        ; mov w-1 into t_right
+        add r4,r0
+        sub r1,r14
+        mov [r4],r1
+        call _ret
+    ; r1 = tindex (u32)
+    ; r2 = mode (u16)
+    @getpositionof:
+        jmp .body
+    .end:
+        brk 3
+        call _ret
+    .body:
+        sub sp,7
+        mov r12,sp
+        shr r2,r14 ; r2 >> 1
+        test r2
+        jz .end
+        brk 1
+        cmp r2,2
+        jg .end
+        brk 2
+        mov r11,3
+        (byte) mov [r12],r11
+        brk 33
+        add r12,r14
+        (word) mov [r12],r2
+        div r1,[invar+16]
+        pop r1
+        add r12,2
+        (word) mov [r12],r1
+        pop r1
+        add r12,2
+        (word) mov [r12],r1
+        mov r1,sp
+        brk 0
+        call _ret
+    @getneighbors:
+        call _ret
+    @getrequiredbits:
+        call _ret
+
+!section .indx
+    _ret () void
+    @constructor (u32 width, u32 height) auto
+    @getpositionof (auto tindex, auto mode) auto
+    @getneighbors (auto tindex) auto
+    @getrequiredbits (auto tindex) auto

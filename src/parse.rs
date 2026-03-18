@@ -38,6 +38,7 @@ fn lex_other<'a>(source: &'a [u8], sourcestr: &'a str, tokstart: usize, tokend: 
     match source[tokstart] {
         b'-' => {canbe &= !(CanBe::UInt as u8);tokstartoffset += 1;}
         b'.' => {canbe &= !(CanBe::UInt as u8 | CanBe::SInt as u8);dotfound = true;tokstartoffset += 1;},
+        b'+' => {canbe &= !(CanBe::Word as u8);tokstartoffset += 1;},
         _ => {}
     }
     if tokstart >= tokend {
@@ -55,7 +56,7 @@ fn lex_other<'a>(source: &'a [u8], sourcestr: &'a str, tokstart: usize, tokend: 
             if dotfound {
                 canbe = 0;
             } else {
-                canbe = CanBe::Float as u8;
+                canbe = CanBe::Float as u8 | CanBe::Word as u8;
                 dotfound = true;
                 // tokstart += 1;
                 continue;
@@ -106,7 +107,7 @@ pub fn lex<'a>(sourcestr: &'a str) -> Result<TokenVec<'a>, TokenVec<'a>> {
                         match tok {
                             Tok::Invalid => {
                                 haderr = true;
-                                error(AsmErr { message: "invalid token", line, column:startcol, context: None });
+                                error(AsmErr { message: "invalid token (a)", line, column:startcol, context: None });
                             },
                             _ => {toks.push(Token { tok, line, column:startcol });}
                         }
@@ -152,7 +153,7 @@ pub fn lex<'a>(sourcestr: &'a str) -> Result<TokenVec<'a>, TokenVec<'a>> {
                         match tok {
                             Tok::Invalid => {
                                 haderr = true;
-                                error(AsmErr { message: "invalid token", line, column:startcol, context: None });
+                                error(AsmErr { message: "invalid token (b)", line, column:startcol, context: None });
                             },
                             _ => {toks.push(Token { tok, line, column:startcol });}
                         }
@@ -538,7 +539,7 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
                 }
                 Section::Code => match cstate.seq {
                     CodeSeq::Scan => match toks[i].tok {
-                        Tok::Word(_) => {cstate.seq=CodeSeq::PrefixLP;continue;}
+                        Tok::Word(_)|Tok::Symbol(b'(') => {cstate.seq=CodeSeq::PrefixLP;continue;}
                         Tok::Newline => {}
                         Tok::Label(_) => {build.push(toks[i].clone());}
                         _ => {haderr=true;error(AsmErr { message: &format!("expected prefix or mnemonic, got: {:?}", toks[i].tok), line: toks[i].line, column: toks[i].column, context: None });}
@@ -591,8 +592,8 @@ pub fn semantic_parse<'a>(toks: Vec<Token<'a>>) -> Result<TokenVec<'a>, TokenVec
                     CodeSeq::Operand => match toks[i].tok {
                         Tok::Symbol(b'[') => match toks[i+1].tok {
                             Tok::Word(word) => {
-                                build.push(Token {tok:match Register::from_word(word) {Some(r)=>Tok::Reg(r),_=>Tok::Word(word)},line:toks[i+1].line,column:toks[i+1].column});
                                 let cl = build.len();
+                                build.push(Token {tok:match Register::from_word(word) {Some(r)=>Tok::Reg(r),_=>Tok::Word(word)},line:toks[i+1].line,column:toks[i+1].column});
                                 match toks[i+2].tok {
                                     Tok::Symbol(b']') => {
                                         let t = &build[build.len()-1];
