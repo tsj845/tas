@@ -162,6 +162,12 @@ fn construct_maps<'a>(mut toks: Vec<Token<'a>>) -> Option<(HashMap<String, (u64,
                     let mut count_deref_regs = false;
                     let call = prefixes.contains(&Prefix::Call);
                     if (*mnemonic).eq(&Mnemonic::BRK) {
+                        if let Tok::UInt(v) = operands[0].1.tok {
+                            if v == 300 {
+                                println!("CPOS: {cpos:#010x}");
+                                continue;
+                            }
+                        }
                         cpos += 2;
                         continue;
                     }
@@ -251,7 +257,8 @@ fn construct_maps<'a>(mut toks: Vec<Token<'a>>) -> Option<(HashMap<String, (u64,
                                     Tok::Deref(inner) => {
                                         for itok in inner {
                                             match itok.tok {
-                                                Tok::SInt(_)|Tok::UInt(_) => {count += min_size(&itok.tok);}
+                                                Tok::SInt(_) => {count += min_size(&itok.tok);}
+                                                Tok::UInt(v) => {count += min_size(&Tok::SInt(v as i64));}
                                                 Tok::Reg(_) => {
                                                     if count_deref_regs {
                                                         if era {
@@ -615,7 +622,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                     let mut call = false;
                     let mut era = false;
                     let mut vsize = 4;
-                    println!("{mnemonic:?} {prefixes:?} {operands:?}");
+                    // println!("{mnemonic:?} {prefixes:?} {operands:?}");
                     for prefix in prefixes {
                         match prefix {
                             Prefix::Byte|Prefix::Word|Prefix::DWord|Prefix::QWord => {
@@ -666,8 +673,10 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                         Mnemonic::BRK => match operands[0].0 {
                             Operand::Imm => match operands[0].1.tok {
                                 Tok::UInt(v) => {
-                                    build.push(0x0b);
-                                    build.push(v as u8);
+                                    if v != 300 {
+                                        build.push(0x0b);
+                                        build.push(v as u8);
+                                    }
                                 }
                                 _ => unreachable!()
                             }
@@ -723,7 +732,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                                         osize = min_size(&inner[1].tok) as u8;
                                                         // RMem is interpreted as a two's compliment signed value
                                                         // must ensure that the high bit is not one for a non-negative value
-                                                        if v.leading_zeros() % 8 == 0 {
+                                                        if v.leading_zeros() % 8 == 0 && v != 0 {
                                                             osize += 1;
                                                             if osize > 8 {
                                                                 panic!("size overflow");
@@ -941,7 +950,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                         },
                                         _ => unreachable!()
                                     };
-                                    println!("{:?}", operands[1].1);
+                                    // println!("{:?}", operands[1].1);
                                     let rx = match operands[1].1.tok {
                                         Tok::Reg(r) => r.value(),
                                         _ => unreachable!()
