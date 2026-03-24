@@ -193,6 +193,25 @@ fn construct_maps<'a>(mut toks: Vec<Token<'a>>) -> Option<(HashMap<String, (u64,
                                     count_deref_regs = true;
                                 }
                             }
+                        } else if operands[1].0 == Operand::RMem {
+                            let ct = operands[1].1.tok.clone();
+                            if match &ct {
+                                Tok::Deref(i) => i.len(),
+                                _ => unreachable!()
+                            } == 1 {
+                                if match &ct {
+                                    Tok::Deref(i) => match i[0].tok {
+                                        Tok::Reg(r) => r.rtype() == Operand::XReg,
+                                        _ => {panic!("parser failure, dereferenced offset without base");}
+                                    }
+                                    _ => unreachable!()
+                                } {
+                                    prefixes.push(Prefix::Era);
+                                    // cpos += 1;
+                                    era = true;
+                                    count_deref_regs = true;
+                                }
+                            }
                         }
                     }
                     if (*mnemonic).is_jmp() {
@@ -928,6 +947,33 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                         Operand::AMem|Operand::RMem|Operand::Imm => {
                                             match operands[1].0 {
                                                 Operand::Imm => {build.push(0x2d);}
+                                                Operand::RMem => {
+                                                    if match &operands[1].1.tok {
+                                                        Tok::Deref(k) => k.len(),
+                                                        _ => unreachable!()
+                                                    } == 1 {
+                                                        // println!("B@ {}", build.len());
+                                                        build.push(0x2e);
+                                                        let ry = match &operands[1].1.tok {
+                                                            Tok::Deref(k) => match k[0].tok {
+                                                                Tok::Reg(r) => r.value(),
+                                                                _ => unreachable!()
+                                                            }
+                                                            _ => unreachable!()
+                                                        };
+                                                        if era {
+                                                            build.push(rx);
+                                                            build.push(ry);
+                                                        } else {
+                                                            build.push((rx<<4)|ry);
+                                                        }
+                                                        output[2].push(build.into_boxed_slice());
+                                                        // println!("ERA: {era}, B@ {}", build.len());
+                                                        continue;
+                                                    } else {
+                                                        build.push(0x2c);
+                                                    }
+                                                }
                                                 _ => {build.push(0x2c);}
                                             }
                                             let valbytes = match make_valbytes(&operands[1], fpd, vsize, parent_label, &label_map) {Ok(v)=>v,Err(_)=>{haderr=true;continue 'outer;}};
@@ -939,6 +985,7 @@ pub fn emit(dstfile: &str, toks: Vec<Token>, dry: bool) -> io::Result<bool> {
                                                 build.push((rx<<4)|((valbytes.len().trailing_zeros() as u8)));
                                             }
                                             build.extend_from_slice(&valbytes);
+                                            // println!("{:?} <-- {:?}", &build, &operands);
                                         }
                                     }
                                 }
