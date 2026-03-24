@@ -1,0 +1,145 @@
+
+!section .conf
+    !purpose 3tr
+    !name "T3R_TEST"
+    !some 1
+    !none 0
+    !fstr "TEST"
+    !invar 7
+
+!section .data
+    r_arr: !res 17 ; space for U32[] of length 4
+
+!section .code
+    _ret:
+        mov r0,6
+        syscall
+    ; r1 = width (u32)
+    ; r2 = height (u32)
+    @constructor:
+        ; get total tiles
+        mov r3,r2
+        mul r3,r1
+        ; store in invar 0
+        mov [invar],r3
+        ; store max neighbors (4) in invar 1
+        mov r4,invar
+        mov r0,4
+        add r4,r0
+        mov [r4],r0
+        ; mov w*h-1 into b_right
+        sub r3,r14
+        add r4,r0
+        mov [r4],r3
+        ; mov w*h-w-1 into b_left
+        add r4,r0
+        sub r3,r1
+        mov [r4],r3
+        ; mov w into width
+        add r4,r0
+        mov [r4],r1
+        ; mov w-1 into t_right
+        add r4,r0
+        sub r1,r14
+        mov [r4],r1
+        ; mov h into height
+        add r4,r0
+        mov [r4],r2
+        call _ret
+    ; r1 = tindex (u32)
+    ; r2 = mode (u16)
+    @getpositionof:
+        jmp .body
+    .error:
+        (byte) mov [r12],r14
+        add r12,r14
+        (word) mov [r12],r15
+        mov r1,data
+        call _ret
+    .body:
+        mov r12,data
+        shr r2,r14 ; r2 >> 1
+        test r2
+        jz .error
+        cmp r2,2
+        jg .error
+        mov r11,3
+        (byte) mov [r12],r11
+        add r12,r14
+        (word) mov [r12],r14
+        div r1,[invar+16]
+        pop r1
+        add r12,2
+        (word) mov [r12],r1
+        pop r1
+        add r12,2
+        (word) mov [r12],r1
+        mov r1,data
+        call _ret
+    @getneighbors:
+        mov r11,data ; array pointer
+        add r11,r14
+        mov r12,r15 ; array length
+        mov r0,4
+        mov r2,[invar+24] ; height
+        mov r3,[invar+16] ; width
+        div r1,r3
+        pop r5 ; X
+        pop r6 ; Y
+        mov r7,r1
+        add r7,r14 ; right
+        mov r8,r1
+        sub r8,r14 ; left
+        mov r9,r1
+        add r9,r3 ; bottom
+        mov r10,r1
+        sub r10,r3 ; top
+        sub r3,r14
+        sub r2,r14
+        test r5
+        jz  .jleft
+        add r12,r14
+        mov [r11],r8
+        add r11,r0
+    .jleft:
+        cmp r5,r3
+        jz  .jright
+        add r12,r14
+        mov [r11],r7
+        add r11,r0
+    .jright:
+        test r6
+        jz  .jtop
+        add r12,r14
+        mov [r11],r10
+        add r11,r0
+    .jtop:
+        cmp r6,r2
+        jz  .jbottom
+        mov [r11],r9
+        add r12,r14
+    .jbottom:
+        (byte) mov [data],r12
+        mov r1,data
+        call _ret
+    @getrequiredbits:
+        mov r2,r1
+        mov r1,r14
+        test r2
+        je  .end
+        cmp r2,[invar+8]
+        je  .end
+        cmp r2,[invar+12]
+        je  .end
+        cmp r2,[invar+20]
+        je  .end
+        add r1,r14
+    .end:
+        call _ret
+
+!section .indx
+    _ret () void
+    @constructor (u32 width, u32 height) auto
+    @getpositionof (auto tindex, auto mode) auto
+    @getneighbors (auto tindex) auto
+    @getrequiredbits (auto tindex) auto
